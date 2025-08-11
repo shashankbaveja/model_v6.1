@@ -1,0 +1,67 @@
+# Configuration for the entire ML pipeline
+python_executable: '/opt/anaconda3/envs/KiteConnect/bin/python'
+
+#---------------------------------------------------
+# 1. DATA & FEATURE GENERATION
+#---------------------------------------------------
+data:
+  training_start_date: '2021-05-01'
+  training_end_date: '2023-05-30'
+  validation_end_date: '2024-06-01'
+  test_end_date: '2025-08-07'
+  token_list_query: "Select distinct instrument_token FROM kiteconnect.instruments_zerodha a WHERE instrument_type = 'EQ' AND lot_size = 1"
+  # nifty_50_token: 256265
+
+target_generation:
+  method: 'volatility'
+  lookahead_candles: 3
+  volatility_tp_multipler: 4.0
+  volatility_sl_multipler: 4.0
+  
+#---------------------------------------------------
+# 4c. COMPOSITE BACKTESTING V3 (Tiered capital)
+#---------------------------------------------------
+backtest_v3:
+  python_executable: '/opt/anaconda3/envs/KiteConnect/bin/python'
+  capital_per_trade: 5000
+  exit_signal_integration: true
+
+  entry_models:
+    - name: entry_model_1
+      model_path: 'models/combined_up_catboost_L10_TP4.0_SL2.0_model.joblib'
+    - name: entry_model_2
+      model_path: 'models/combined_up_catboost_L15_TP4.0_SL2.0_model.joblib'
+
+  exit_model:
+    model_path: 'models/combined_down_catboost_L15_TP4.0_SL2.0_model.joblib'
+    threshold_for_entry_filter: 0.25
+    threshold_for_exit_signal: 0.35
+
+  allow_reentry_updates: true
+
+#---------------------------------------------------
+# 2. MODELING
+#---------------------------------------------------
+modeling: 
+  strategies_to_train: ['combined']
+  targets: ['target_up', 'target_down']
+  model_types: ['catboost']
+  random_state: 42
+  #lightgbm
+
+#---------------------------------------------------
+# 3. HYPERPARAMETER TUNING
+#---------------------------------------------------
+hyperparameter_tuning:
+  n_trials: 100
+  early_stopping_rounds: 50
+  depth_min: 3
+  depth_max: 8
+  learning_rate_min: 0.01
+  learning_rate_max: 0.1
+  l2_leaf_reg_min: 1.0
+  l2_leaf_reg_max: 10.0
+  subsample_min: 0.6
+  subsample_max: 1.0
+  penalty_weight_min: 2.0
+  penalty_weight_max: 5

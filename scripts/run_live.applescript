@@ -1,0 +1,4 @@
+tell application "Terminal"
+	activate
+	do script "cd /Users/shashankbaveja/Main/Projects/KiteConnectAPI/Model_v5 && /opt/anaconda3/bin/activate && conda activate /opt/anaconda3/envs/KiteConnect && python src/run_live.py"
+end tell
