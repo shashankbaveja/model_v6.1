@@ -62,10 +62,14 @@ def run_step(command, log_file):
 def prepare_trade_data(systemDetails, now):
     """Loads daily trades, maps tokens to symbols, and filters for today."""
     try:
-        signals_df = pd.read_csv('reports/trades/daily_trades.csv')
+        # Prefer v3 output; fallback to legacy filename if needed
+        try:
+            signals_df = pd.read_csv('reports/trades/daily_trades_v3.csv')
+        except FileNotFoundError:
+            signals_df = pd.read_csv('reports/trades/daily_trades.csv')
     except FileNotFoundError:
-        print("ERROR: daily_trades.csv not found. Skipping trade processing.")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        print("ERROR: daily_trades_v3.csv and daily_trades.csv not found. Skipping trade processing.")
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     token_list = signals_df['instrument_token'].unique()
     token_to_symbol = {}
@@ -150,7 +154,7 @@ def main():
         run_step([python_executable,  '-u', 'src/feature_generator.py'], log_file)
         run_step([python_executable,  '-u', 'src/pattern_feature_generator.py'], log_file)
         run_step([python_executable,  '-u', 'src/merge_features.py'], log_file)
-        run_step([python_executable,  '-u', 'src/trade_generator.py'], log_file)
+        run_step([python_executable,  '-u', 'src/trade_generator_v3.py'], log_file)
 
         signals_df, entry_df, exit_df, active_df = prepare_trade_data(systemDetails, now)
         ask_gemini(entry_df, order_placement)

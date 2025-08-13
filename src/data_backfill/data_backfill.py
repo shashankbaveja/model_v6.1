@@ -37,7 +37,7 @@ warnings.filterwarnings("ignore")
 
 if __name__ == "__main__":
     BACKFILL_INTERVAL = 'minute'
-    BACKFILL_DAYS = 3
+    BACKFILL_DAYS = 1
     
     today_date = date.today()
     
@@ -57,7 +57,7 @@ if __name__ == "__main__":
     tokenList.extend(callKite.get_instrument_active_tokens('CE',end_dt_backfill))
     tokenList.extend(callKite.get_instrument_active_tokens('PE',end_dt_backfill))
     tokenList.extend(callKite.get_instrument_active_tokens('FUT',end_dt_backfill))
-    tokenList.extend(callKite.get_instrument_all_tokens('EQ'))
+    # tokenList.extend(callKite.get_instrument_all_tokens('EQ'))
 
 
     try:

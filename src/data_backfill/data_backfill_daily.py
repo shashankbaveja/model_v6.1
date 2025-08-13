@@ -53,8 +53,8 @@ if __name__ == "__main__":
     callKite = kiteAPIs()
     order_placement = OrderPlacement()
     trades = callKite.get_trades()
+    systemDetails.store_daily_balances()
     print("Trades Updated in DB!")
-    
     systemDetails.run_query_limit(f"Call trades_PnL();")
     # Pnl, metrics = systemDetails.GetPnL()
     # Pnl.to_csv('pnl.csv')

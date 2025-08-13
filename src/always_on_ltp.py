@@ -32,10 +32,14 @@ except KeyError:
 def prepare_trade_data(systemDetails, now):
     """Loads daily trades, maps tokens to symbols, and filters for today."""
     try:
-        signals_df = pd.read_csv('reports/trades/daily_trades.csv')
+        # Prefer v3 output; fallback to legacy filename if needed
+        try:
+            signals_df = pd.read_csv('reports/trades/daily_trades_v3.csv')
+        except FileNotFoundError:
+            signals_df = pd.read_csv('reports/trades/daily_trades.csv')
     except FileNotFoundError:
-        print("ERROR: daily_trades.csv not found. Skipping trade processing.")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        print("ERROR: daily_trades_v3.csv and daily_trades.csv not found. Skipping trade processing.")
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     token_list = signals_df['instrument_token'].unique()
     token_to_symbol = {}
@@ -88,6 +92,7 @@ def reconcile_portfolio_state(order_placement, systemDetails, live_holdings_df, 
 
     # 1. Determine trades to ENTER
     symbols_to_enter = target_symbols - held_symbols
+
     if symbols_to_enter:
         print(f"--- Processing {len(symbols_to_enter)} Entries ---")
         # Combine entry and active dfs to get trade parameters
@@ -150,6 +155,38 @@ def reconcile_portfolio_state(order_placement, systemDetails, live_holdings_df, 
 
 
 
+
+def report_portfolio_mismatches(order_placement, live_holdings_df, entry_df, exit_df, active_df):
+    """
+    Compute and report mismatches without placing trades.
+    Sends a Telegram message for each mismatch found.
+    """
+    print("\n--- Reporting Portfolio Mismatches (no trades) ---")
+
+    held_symbols = set(live_holdings_df['tradingsymbol']) if not live_holdings_df.empty else set()
+    entry_symbols = set(entry_df['tradingsymbol']) if not entry_df.empty else set()
+    active_symbols = set(active_df['tradingsymbol']) if not active_df.empty else set()
+    exit_symbols = set(exit_df['tradingsymbol']) if not exit_df.empty else set()
+
+    target_symbols = entry_symbols.union(active_symbols)
+    all_internal_symbols = target_symbols.union(exit_symbols)
+
+    should_not_exist = held_symbols - all_internal_symbols
+    should_exist = target_symbols - held_symbols
+
+    if not should_not_exist and not should_exist:
+        print("No mismatches detected after reconciliation.")
+        return
+
+    for symbol in sorted(should_not_exist):
+        msg = f"tradingsymbol {symbol} should not exist but it does"
+        print(msg)
+        order_placement.send_telegram_message(msg)
+
+    for symbol in sorted(should_exist):
+        msg = f"tradingsymbol {symbol} should exist but it does not. No more trades during this check."
+        print(msg)
+        order_placement.send_telegram_message(msg)
 
 def retry_with_backoff(func, max_retries=3, backoff_factor=2, *args, **kwargs):
     """
@@ -247,7 +284,7 @@ def main():
     print(f"\n{'='*30}\n--- Starting New Trading Cycle at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---\n{'='*30}")
 
     market_start_time = now.replace(hour=9, minute=15, second=0, microsecond=0)
-    market_trade_end_time = now.replace(hour=9, minute=25, second=0, microsecond=0)
+    market_trade_end_time = now.replace(hour=10, minute=25, second=0, microsecond=0)
     market_end_time = now.replace(hour=15, minute=31, second=0, microsecond=0)
 # --- 2. Fetch Live and Signal Data ---
     
@@ -270,13 +307,21 @@ def main():
             
     if market_start_time <= now <= market_trade_end_time:
         try:
+            # Initial reconciliation before monitoring loop
             reconcile_portfolio_state(order_placement, systemDetails, active_trades, entry_df, exit_df, active_df)
-            
-            
+
         except Exception as e:
             print(f"ERROR: An unexpected error occurred in the main loop: {e}")
             order_placement.send_telegram_message(f"ERROR in Live Monitoring: {e}")
 
+    try:
+        # Re-fetch holdings and report mismatches (no trades) before loop
+        refreshed_holdings = retry_with_backoff(get_holdings, 3, 2, callKite, systemDetails, order_placement)
+        report_portfolio_mismatches(order_placement, refreshed_holdings, entry_df, exit_df, active_df)
+    except Exception as e:
+        print(f"ERROR: An unexpected error occurred in the main loop: {e}")
+        order_placement.send_telegram_message(f"ERROR in Live Monitoring: {e}")
+    
     # --- 3. Live TP/SL Monitoring ---
     
     while True:

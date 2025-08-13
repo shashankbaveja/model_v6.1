@@ -10,6 +10,8 @@ import subprocess
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.data_backfill.myKiteLib import system_initialization
 
+TRADING_DAYS_PATH = 'data/trading_days.parquet'
+
 
 def load_config(config_path='config/parameters.yml') -> dict:
     try:
@@ -19,6 +21,62 @@ def load_config(config_path='config/parameters.yml') -> dict:
         print(f"Error loading configuration: {e}")
         sys.exit(1)
 
+
+def load_or_build_trading_days(master_df: pd.DataFrame) -> pd.DatetimeIndex:
+    """
+    Load trading days from persistent storage (data/trading_days.parquet).
+    If missing, build from master_df dates + 1 year of future weekdays (Mon-Fri), then persist.
+    Returns a sorted, unique DatetimeIndex of normalized dates.
+    """
+    try:
+        if os.path.exists(TRADING_DAYS_PATH):
+            df = pd.read_parquet(TRADING_DAYS_PATH)
+            if 'date' not in df.columns and len(df.columns) > 0:
+                df = df.rename(columns={df.columns[0]: 'date'})
+            trading_days = pd.to_datetime(df['date']).dt.normalize().dropna().drop_duplicates().sort_values()
+            return pd.DatetimeIndex(trading_days)
+    except Exception as e:
+        print(f"WARN: Could not read {TRADING_DAYS_PATH}. Will rebuild. Details: {e}")
+
+    os.makedirs(os.path.dirname(TRADING_DAYS_PATH), exist_ok=True)
+    base_dates = (
+        pd.to_datetime(master_df['timestamp'])
+        .dt.normalize()
+        .dropna()
+        .drop_duplicates()
+        .sort_values()
+    )
+    last_known = base_dates.max() if not base_dates.empty else pd.Timestamp.today().normalize()
+    start_future = max(pd.Timestamp.today().normalize(), last_known)
+    end_future = start_future + pd.DateOffset(years=1)
+    future_weekdays = pd.date_range(start=start_future, end=end_future, freq='B')
+
+    combined = pd.DatetimeIndex(base_dates).union(future_weekdays).unique().sort_values()
+    persist_df = pd.DataFrame({'date': combined})
+    try:
+        persist_df.to_parquet(TRADING_DAYS_PATH, index=False)
+        print(f"Saved trading days to {TRADING_DAYS_PATH} ({len(persist_df)} rows)")
+    except Exception as e:
+        print(f"WARN: Failed to save trading days to {TRADING_DAYS_PATH}: {e}")
+
+    return combined
+
+
+def add_trading_days(base_ts: pd.Timestamp, num_days: int, trading_days: pd.DatetimeIndex) -> pd.Timestamp:
+    """
+    Return the trading date that is `num_days` sessions after `base_ts`.
+    If beyond available range, clamp to the last available trading day.
+    """
+    if trading_days is None or len(trading_days) == 0:
+        return pd.to_datetime(base_ts).normalize()
+
+    base_date = pd.to_datetime(base_ts).normalize()
+    arr = trading_days.values
+    idx = np.searchsorted(arr, base_date.to_datetime64(), side='left')
+    target_idx = idx + int(num_days)
+    if target_idx >= len(arr):
+        target_idx = len(arr) - 1
+    return pd.Timestamp(trading_days[target_idx])
 
 def prepare_data_v3(config: dict) -> pd.DataFrame:
     print("--- Phase 1 (v3): Data Preparation ---")
@@ -82,6 +140,7 @@ def run_simulation_v3(
     precomputed_next_candle_map: dict | None = None,
     precomputed_last_rows_map: dict | None = None,
     produce_debug: bool = True,
+    trading_days: pd.DatetimeIndex | None = None,
 ):
     print("\n--- Phase 2 (v3): Backtesting Simulation ---")
     backtest_config = config['backtest_v3']
@@ -103,6 +162,9 @@ def run_simulation_v3(
         debug_df['current_sl'] = np.nan
         debug_df['hp_exit_date'] = pd.NaT
         debug_df['entry_source'] = ''
+
+    if trading_days is None:
+        trading_days = load_or_build_trading_days(df)
 
     for instrument, group in df.groupby('instrument_token'):
         for row in group.itertuples(index=True):
@@ -155,7 +217,7 @@ def run_simulation_v3(
                         new_base = row.close
                         trade['tp_price'] = new_base * (1 + row.volatility_ewma_30d * target_generation['volatility_tp_multipler'])
                         trade['sl_price'] = new_base * (1 - row.volatility_ewma_30d * target_generation['volatility_sl_multipler'])
-                        trade['hp_exit_date'] = pd.to_datetime(row.timestamp.date() + timedelta(days=target_generation['lookahead_candles']))
+                        trade['hp_exit_date'] = add_trading_days(row.timestamp, target_generation['lookahead_candles'], trading_days)
                         trade['entry_signal_prob_1'] = row.entry_signal_prob_1
                         trade['entry_signal_prob_2'] = row.entry_signal_prob_2
                         trade['exit_signal_prob'] = row.exit_signal_prob
@@ -190,7 +252,7 @@ def run_simulation_v3(
                         if num_shares > 0:
                             tp_price = entry_price * (1 + row.volatility_ewma_30d * target_generation['volatility_tp_multipler'])
                             sl_price = entry_price * (1 - row.volatility_ewma_30d * target_generation['volatility_sl_multipler'])
-                            hp_exit_date = pd.to_datetime(entry_date.date() + timedelta(days=target_generation['lookahead_candles']))
+                            hp_exit_date = add_trading_days(entry_date, target_generation['lookahead_candles'], trading_days)
                             active_trades[instrument] = {
                                 'instrument_token': instrument,
                                 'tradingsymbol': row.tradingsymbol,
@@ -330,7 +392,8 @@ def main():
     config = load_config()
 
     master_df = prepare_data_v3(config)
-    trade_log, debug_df = run_simulation_v3(master_df, config)
+    trading_days = load_or_build_trading_days(master_df)
+    trade_log, debug_df = run_simulation_v3(master_df, config, trading_days=trading_days)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     reports_dir = 'reports'
