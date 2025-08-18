@@ -6,26 +6,19 @@ import time
 import pandas as pd
 import json
 from kiteconnect.exceptions import KiteException, InputException
-import google.generativeai as genai
 
 # --- Configuration & Imports ---
 LOG_DIR = 'logs'
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from myKiteLib import OrderPlacement, kiteAPIs, system_initialization
-from src.live_trading_helpers import (
-    load_config, get_holdings, run_gemini_bridge
+from src.utils.live_trading_helpers import (
+    load_config, get_holdings
 )
 
 # --- Environment Setup ---
 from dotenv import load_dotenv
 load_dotenv()
-try:
-    api_key = os.environ["GEMINI_API_KEY"]
-    genai.configure(api_key=api_key)
-except KeyError:
-    print("Please make sure your .env file is configured correctly with GEMINI_API_KEY.")
-    exit()
 
 def run_step(command, log_file):
     """Executes a command as a subprocess and logs its output."""
@@ -57,55 +50,6 @@ def run_step(command, log_file):
             f.write(f"\n{error_msg}\n")
         return False
     return True
-
-
-def prepare_trade_data(systemDetails, now):
-    """Loads daily trades, maps tokens to symbols, and filters for today."""
-    try:
-        # Prefer v3 output; fallback to legacy filename if needed
-        try:
-            signals_df = pd.read_csv('reports/trades/daily_trades_v3.csv')
-        except FileNotFoundError:
-            signals_df = pd.read_csv('reports/trades/daily_trades.csv')
-    except FileNotFoundError:
-        print("ERROR: daily_trades_v3.csv and daily_trades.csv not found. Skipping trade processing.")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-
-    token_list = signals_df['instrument_token'].unique()
-    token_to_symbol = {}
-    for token in token_list:
-        result = systemDetails.run_query_limit(f"Select distinct tradingsymbol from kiteconnect.instruments_zerodha where instrument_token = {token}")
-        if result:
-            token_to_symbol[token] = result[0]
-            
-    signals_df['tradingsymbol'] = signals_df['instrument_token'].map(token_to_symbol)
-    
-    # Use hardcoded dates for testing if needed, otherwise use current date
-    # exit_df = signals_df[signals_df['exit_date'] == '2025-07-18']
-    # entry_df = signals_df[signals_df['entry_date'] == '2025-07-18']
-    exit_df = signals_df[signals_df['exit_reason'] == 'exit_today']
-    entry_df = signals_df[signals_df['exit_reason'] == 'enter_today']
-    active_df = signals_df[(signals_df['entry_date'] <= now.strftime('%Y-%m-%d')) & (signals_df['exit_reason'] == 'Active')]
-    
-    print(f"INFO: Found {len(entry_df)} new entry signals and {len(exit_df)} new exit signals for today.")
-    return signals_df, entry_df, exit_df, active_df
-
-def ask_gemini(entry_df, order_placement):
-    """Processes entry signals, gets Gemini opinion, and places buy orders."""
-    if entry_df.empty:
-        order_placement.send_telegram_message("No New Trades Today")
-
-    print(f"--- Processing {len(entry_df)} Entries ---")
-    order_placement.send_telegram_message("New Trades:")
-    all_results = []
-    
-    for _, row in entry_df.iterrows():
-        tradingsymbol = row['tradingsymbol']
-        gemini_result = run_gemini_bridge(tradingsymbol)
-        all_results.extend(gemini_result)
-
-    for item in all_results:
-        order_placement.send_telegram_message(json.dumps(item, indent=4))
 
 
 def main():
@@ -154,10 +98,9 @@ def main():
         run_step([python_executable,  '-u', 'src/feature_generator.py'], log_file)
         run_step([python_executable,  '-u', 'src/pattern_feature_generator.py'], log_file)
         run_step([python_executable,  '-u', 'src/merge_features.py'], log_file)
-        run_step([python_executable,  '-u', 'src/trade_generator_v3.py'], log_file)
+        run_step([python_executable,  '-u', 'src/signal_generator_v3.py'], log_file)
+        run_step([python_executable,  '-u', 'src/trade_generator.py'], log_file)
 
-        signals_df, entry_df, exit_df, active_df = prepare_trade_data(systemDetails, now)
-        ask_gemini(entry_df, order_placement)
         
     except KeyboardInterrupt:
         print("\nTrade Generation stopped by user.")

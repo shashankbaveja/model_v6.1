@@ -8,7 +8,7 @@ data:
   training_start_date: '2021-05-01'
   training_end_date: '2023-05-30'
   validation_end_date: '2024-06-01'
-  test_end_date: '2025-08-13'
+  test_end_date: '2025-08-18'
   token_list_query: "Select distinct instrument_token FROM kiteconnect.instruments_zerodha a WHERE instrument_type = 'EQ' AND lot_size = 1"
   # nifty_50_token: 256265
 
@@ -23,7 +23,7 @@ target_generation:
 #---------------------------------------------------
 backtest_v3:
   python_executable: '/opt/anaconda3/envs/KiteConnect/bin/python'
-  capital_per_trade: 5000
+  capital_per_trade: 10000
   exit_signal_integration: true
 
   entry_models:
@@ -36,6 +36,12 @@ backtest_v3:
     model_path: 'models/combined_down_catboost_L15_TP4.0_SL2.0_model.joblib'
     threshold_for_entry_filter: 0.25
     threshold_for_exit_signal: 0.35
+  
+  entry_tiers:
+    m6_p1_thr: 0.78
+    m6_p2_thr: 0.77
+    m4_p1_thr: 0.7
+    m4_p2_thr: 0.7
 
   allow_reentry_updates: true
 

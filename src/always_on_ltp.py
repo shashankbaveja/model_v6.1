@@ -14,7 +14,7 @@ LOG_DIR = 'logs/live_monitoring'
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from myKiteLib import OrderPlacement, kiteAPIs, system_initialization
-from src.live_trading_helpers import (
+from src.utils.live_trading_helpers import (
     load_config, get_holdings, run_gemini_bridge
 )
 
@@ -33,12 +33,9 @@ def prepare_trade_data(systemDetails, now):
     """Loads daily trades, maps tokens to symbols, and filters for today."""
     try:
         # Prefer v3 output; fallback to legacy filename if needed
-        try:
-            signals_df = pd.read_csv('reports/trades/daily_trades_v3.csv')
-        except FileNotFoundError:
-            signals_df = pd.read_csv('reports/trades/daily_trades.csv')
+        signals_df = pd.read_csv('reports/trade_log.csv')
     except FileNotFoundError:
-        print("ERROR: daily_trades_v3.csv and daily_trades.csv not found. Skipping trade processing.")
+        print("ERROR: trade_log.csv not found. Skipping trade processing.")
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     token_list = signals_df['instrument_token'].unique()
@@ -60,133 +57,6 @@ def prepare_trade_data(systemDetails, now):
     print(f"INFO: Found {len(entry_df)} new entry signals and {len(exit_df)} new exit signals for today.")
     return signals_df, entry_df, exit_df, active_df
 
-
-
-
-
-
-def reconcile_portfolio_state(order_placement, systemDetails, live_holdings_df, entry_df, exit_df, active_df):
-    """
-    Reconciles the live portfolio state with the target state from signal files.
-    - Enters trades that are in entry/active lists but not in live holdings.
-    - Exits trades that are in live holdings and also in the exit list.
-    - Exits trades that are in live holdings but not in any internal list (mismatch).
-    """
-    print("\n--- Reconciling Portfolio State ---")
-
-    # Ensure dataframes have 'tradingsymbol' column
-    for df_name, df in [('live_holdings_df', live_holdings_df), ('entry_df', entry_df), ('exit_df', exit_df), ('active_df', active_df)]:
-        if 'tradingsymbol' not in df.columns and not df.empty:
-            print(f"WARN: '{df_name}' is missing 'tradingsymbol' column. Skipping.")
-            # Or handle error appropriately
-            return
-
-    # Create sets of trading symbols for efficient comparison
-    held_symbols = set(live_holdings_df['tradingsymbol']) if not live_holdings_df.empty else set()
-    entry_symbols = set(entry_df['tradingsymbol']) if not entry_df.empty else set()
-    active_symbols = set(active_df['tradingsymbol']) if not active_df.empty else set()
-    exit_symbols = set(exit_df['tradingsymbol']) if not exit_df.empty else set()
-
-    target_symbols = entry_symbols.union(active_symbols)
-    all_internal_symbols = target_symbols.union(exit_symbols)
-
-    # 1. Determine trades to ENTER
-    symbols_to_enter = target_symbols - held_symbols
-
-    if symbols_to_enter:
-        print(f"--- Processing {len(symbols_to_enter)} Entries ---")
-        # Combine entry and active dfs to get trade parameters
-        enter_params_df = pd.concat([entry_df, active_df]).drop_duplicates(subset=['tradingsymbol'])
-        
-        for symbol in symbols_to_enter:
-            trade_details = enter_params_df[enter_params_df['tradingsymbol'] == symbol].iloc[0]
-            quantity = int(trade_details['num_shares']) # Assuming 'num_shares' is the column for quantity
-            print(f"Entering trade for {symbol}, Quantity: {quantity}")
-            
-            try:
-                # This logic is copied from process_entries to handle NSE/BSE
-                order_id = order_placement.place_market_order_live(symbol, 'NSE', 'BUY', quantity, 'CNC', 'Recon_Entry')
-                message = f"Order placed successfully for {symbol} on NSE. Order ID: {order_id}"
-                print(message)
-                order_placement.send_telegram_message(message)
-            except InputException as e:
-                if 'The instrument you are placing an order for has either expired or does not exist' in str(e):
-                    print(f"Instrument {symbol} not found on NSE. Attempting on BSE.")
-                    try:
-                        order_id_bse = order_placement.place_market_order_live(symbol, 'BSE', 'BUY', quantity, 'CNC', 'Recon_Entry')
-                        message = f"Order placed successfully for {symbol} on BSE. Order ID: {order_id_bse}"
-                        print(message)
-                        order_placement.send_telegram_message(message)
-                    except KiteException as bse_e:
-                        message = f"Error placing order for {symbol} on BSE after NSE failed. Error: {bse_e}"
-                        print(message)
-                        order_placement.send_telegram_message(message)
-            except KiteException as e:
-                message = f"Error placing order for {symbol} on NSE: {e}"
-                print(message)
-                order_placement.send_telegram_message(message)
-
-    # 2. Determine trades to EXIT
-    planned_exits = held_symbols.intersection(exit_symbols)
-    mismatch_exits = held_symbols - all_internal_symbols
-    symbols_to_exit = planned_exits.union(mismatch_exits)
-    
-    if symbols_to_exit:
-        print(f"--- Processing {len(symbols_to_exit)} Exits ---")
-        for symbol in symbols_to_exit:
-            reason = 'PLANNED_EXIT' if symbol in planned_exits else 'MISMATCH_CLEANUP'
-            
-            # Get quantity and exchange from live holdings
-            holding_details = live_holdings_df[live_holdings_df['tradingsymbol'] == symbol].iloc[0]
-            quantity = int(holding_details['quantity'])
-            exchange = holding_details['exchange']
-
-            print(f"Exiting trade for {symbol} ({quantity} qty) due to: {reason}")
-            try:
-                order_placement.place_market_order_live(symbol, exchange, 'SELL', quantity, 'CNC', reason)
-                order_placement.send_telegram_message(f"Exiting trade for {symbol} ({quantity} qty) due to: {reason}")
-            except Exception as e:
-                print(f"Error placing exit order for {symbol}: {e}")
-                order_placement.send_telegram_message(f"Error placing exit order for {symbol}: {e}")
-    
-    if not symbols_to_enter and not symbols_to_exit:
-        print("OK: Portfolio is already in sync with signals. No trades needed.")
-
-
-
-
-
-def report_portfolio_mismatches(order_placement, live_holdings_df, entry_df, exit_df, active_df):
-    """
-    Compute and report mismatches without placing trades.
-    Sends a Telegram message for each mismatch found.
-    """
-    print("\n--- Reporting Portfolio Mismatches (no trades) ---")
-
-    held_symbols = set(live_holdings_df['tradingsymbol']) if not live_holdings_df.empty else set()
-    entry_symbols = set(entry_df['tradingsymbol']) if not entry_df.empty else set()
-    active_symbols = set(active_df['tradingsymbol']) if not active_df.empty else set()
-    exit_symbols = set(exit_df['tradingsymbol']) if not exit_df.empty else set()
-
-    target_symbols = entry_symbols.union(active_symbols)
-    all_internal_symbols = target_symbols.union(exit_symbols)
-
-    should_not_exist = held_symbols - all_internal_symbols
-    should_exist = target_symbols - held_symbols
-
-    if not should_not_exist and not should_exist:
-        print("No mismatches detected after reconciliation.")
-        return
-
-    for symbol in sorted(should_not_exist):
-        msg = f"tradingsymbol {symbol} should not exist but it does"
-        print(msg)
-        order_placement.send_telegram_message(msg)
-
-    for symbol in sorted(should_exist):
-        msg = f"tradingsymbol {symbol} should exist but it does not. No more trades during this check."
-        print(msg)
-        order_placement.send_telegram_message(msg)
 
 def retry_with_backoff(func, max_retries=3, backoff_factor=2, *args, **kwargs):
     """
@@ -280,11 +150,11 @@ def main():
             sys.exit(1)
 
  
-    now = datetime.now()
+    now = datetime.now() 
     print(f"\n{'='*30}\n--- Starting New Trading Cycle at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---\n{'='*30}")
 
     market_start_time = now.replace(hour=9, minute=15, second=0, microsecond=0)
-    market_trade_end_time = now.replace(hour=10, minute=25, second=0, microsecond=0)
+    market_trade_end_time = now.replace(hour=13, minute=25, second=0, microsecond=0)
     market_end_time = now.replace(hour=15, minute=31, second=0, microsecond=0)
 # --- 2. Fetch Live and Signal Data ---
     
@@ -304,25 +174,7 @@ def main():
     print(f"Entry DF: {entry_df}")
     print(f"Exit DF: {exit_df}")
     print(f"Active DF: {active_df}")
-            
-    if market_start_time <= now <= market_trade_end_time:
-        try:
-            # Initial reconciliation before monitoring loop
-            reconcile_portfolio_state(order_placement, systemDetails, active_trades, entry_df, exit_df, active_df)
-
-        except Exception as e:
-            print(f"ERROR: An unexpected error occurred in the main loop: {e}")
-            order_placement.send_telegram_message(f"ERROR in Live Monitoring: {e}")
-
-    try:
-        # Re-fetch holdings and report mismatches (no trades) before loop
-        refreshed_holdings = retry_with_backoff(get_holdings, 3, 2, callKite, systemDetails, order_placement)
-        report_portfolio_mismatches(order_placement, refreshed_holdings, entry_df, exit_df, active_df)
-    except Exception as e:
-        print(f"ERROR: An unexpected error occurred in the main loop: {e}")
-        order_placement.send_telegram_message(f"ERROR in Live Monitoring: {e}")
-    
-    # --- 3. Live TP/SL Monitoring ---
+   
     
     while True:
         now = datetime.now()

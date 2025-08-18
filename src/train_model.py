@@ -15,7 +15,7 @@ import numpy as np
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.data_pipeline import load_config
-from src.modeling_utils import tune_hyperparameters
+from src.utils.modeling_utils import tune_hyperparameters
 
 
 def generate_binary_targets(df, config):
