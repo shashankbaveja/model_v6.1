@@ -67,7 +67,9 @@ if __name__ == "__main__":
 
     try:
         print(f"Deleting data for {start_dt_backfill} to {end_dt_backfill}")
-        result = systemDetails.DeleteData("Delete from kiteconnect.historical_data_day where timestamp >= date_add(CURDATE(), interval -2 day)")
+        query = f"Delete from kiteconnect.historical_data_day where timestamp >= date_add(CURDATE(), interval -{BACKFILL_DAYS} day)"
+        print(f"Deleting data for {start_dt_backfill} to {end_dt_backfill}")
+        result = systemDetails.DeleteData(query)
         print(f"Result: {result}")
         df = callKite.getHistoricalData(start_dt_backfill,  end_dt_backfill, tokenList, BACKFILL_INTERVAL)
     except (KiteException, requests.exceptions.ReadTimeout) as e:

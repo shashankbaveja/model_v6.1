@@ -15,19 +15,10 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from myKiteLib import OrderPlacement, kiteAPIs, system_initialization
 from src.utils.live_trading_helpers import (
-    load_config, get_holdings, run_gemini_bridge
+    load_config, get_holdings
 )
 
 # --- Environment Setup ---
-from dotenv import load_dotenv
-load_dotenv()
-try:
-    api_key = os.environ["GEMINI_API_KEY"]
-    genai.configure(api_key=api_key)
-except KeyError:
-    print("Please make sure your .env file is configured correctly with GEMINI_API_KEY.")
-    exit()
-
 
 def prepare_trade_data(systemDetails, now):
     """Loads daily trades, maps tokens to symbols, and filters for today."""
@@ -154,7 +145,6 @@ def main():
     print(f"\n{'='*30}\n--- Starting New Trading Cycle at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---\n{'='*30}")
 
     market_start_time = now.replace(hour=9, minute=15, second=0, microsecond=0)
-    market_trade_end_time = now.replace(hour=13, minute=25, second=0, microsecond=0)
     market_end_time = now.replace(hour=15, minute=31, second=0, microsecond=0)
 # --- 2. Fetch Live and Signal Data ---
     

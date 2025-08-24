@@ -15,7 +15,7 @@ from src.utils.live_trading_helpers import (
     load_config, get_holdings
 )
 
-liquid_token = '5568001'
+liquid_token = '139286788'
 liquid_symbol = 'LIQUIDCASE'
 
 def prepare_trade_data(systemDetails, now):
@@ -45,7 +45,25 @@ def prepare_trade_data(systemDetails, now):
     return signals_df, entry_df, exit_df, active_df, gross_amount_needed
 
 
-def rebalance_portfolio(order_placement, systemDetails, live_holdings_df, entry_df, exit_df, active_df, gross_amount_needed):
+def _summarize_kite_error_message(err_text: str) -> str:
+    text = str(err_text) if err_text is not None else ''
+    lower_text = text.lower()
+    if 'market orders are blocked' in lower_text or 'market orders are blocked' in text:
+        return 'MARKET orders are blocked'
+    if 'insufficient funds' in lower_text:
+        return 'Insufficient funds'
+    if 'markets are closed right now' in lower_text:
+        return 'Markets are closed right now'
+    # Fallback to exact exception text
+    return text
+
+def _notify_order_failure(order_placement, symbol: str, side: str, err: Exception):
+    reason = _summarize_kite_error_message(err)
+    msg = f"{symbol} {side} order failed: {reason}"
+    print(msg)
+    order_placement.send_telegram_message(msg)
+
+def rebalance_portfolio(order_placement, systemDetails, live_holdings_df, entry_df, exit_df, active_df, gross_amount_needed, active_trades):
     """
     Reconciles the live portfolio state with the target state from signal files.
     - Enters trades that are in entry/active lists but not in live holdings.
@@ -89,11 +107,10 @@ def rebalance_portfolio(order_placement, systemDetails, live_holdings_df, entry_
 
             print(f"Exiting trade for {symbol} ({quantity} qty) due to: {reason}")
             try:
-                order_placement.place_market_order_live(symbol, exchange, 'SELL', quantity, 'CNC', reason)
+                order_placement.place_market_order_live(symbol, exchange, 'SELL', quantity, 'CNC', reason, notify_on_error=False)
                 order_placement.send_telegram_message(f"Exiting trade for {symbol} ({quantity} qty) due to: {reason}")
             except Exception as e:
-                print(f"Error placing exit order for {symbol}: {e}")
-                order_placement.send_telegram_message(f"Error placing exit order for {symbol}: {e}")
+                _notify_order_failure(order_placement, symbol, 'SELL', e)
     
     
     
@@ -112,7 +129,7 @@ def rebalance_portfolio(order_placement, systemDetails, live_holdings_df, entry_
             
             try:
                 # This logic is copied from process_entries to handle NSE/BSE
-                order_id = order_placement.place_market_order_live(symbol, 'NSE', 'BUY', quantity, 'CNC', 'Recon_Entry')
+                order_id = order_placement.place_market_order_live(symbol, 'NSE', 'BUY', quantity, 'CNC', 'Recon_Entry', notify_on_error=False)
                 message = f"Order placed successfully for {symbol} on NSE. Order ID: {order_id}"
                 print(message)
                 order_placement.send_telegram_message(message)
@@ -120,18 +137,14 @@ def rebalance_portfolio(order_placement, systemDetails, live_holdings_df, entry_
                 if 'The instrument you are placing an order for has either expired or does not exist' in str(e):
                     print(f"Instrument {symbol} not found on NSE. Attempting on BSE.")
                     try:
-                        order_id_bse = order_placement.place_market_order_live(symbol, 'BSE', 'BUY', quantity, 'CNC', 'Recon_Entry')
+                        order_id_bse = order_placement.place_market_order_live(symbol, 'BSE', 'BUY', quantity, 'CNC', 'Recon_Entry', notify_on_error=False)
                         message = f"Order placed successfully for {symbol} on BSE. Order ID: {order_id_bse}"
                         print(message)
                         order_placement.send_telegram_message(message)
                     except KiteException as bse_e:
-                        message = f"Error placing order for {symbol} on BSE after NSE failed. Error: {bse_e}"
-                        print(message)
-                        order_placement.send_telegram_message(message)
+                        _notify_order_failure(order_placement, symbol, 'BUY', bse_e)
             except KiteException as e:
-                message = f"Error placing order for {symbol} on NSE: {e}"
-                print(message)
-                order_placement.send_telegram_message(message)
+                _notify_order_failure(order_placement, symbol, 'BUY', e)
 
    
     if not symbols_to_enter and not symbols_to_exit:
@@ -207,28 +220,26 @@ def get_back_liquidity(active_trades, liquid_token, order_placement, systemDetai
 
     liquidcash_quantity = 0
     if active_trades is not None and not active_trades.empty:
-        liquid_mask = active_trades['instrument_token'] == liquid_token_int
-        liquidcash_quantity = int(active_trades.loc[liquid_mask, 'quantity'].sum())
+        # liquid_mask = active_trades['instrument_token'] == liquid_token_int
+        liquidcash_quantity = active_trades[active_trades['tradingsymbol'] == liquid_symbol]['quantity'].sum()
     liquidcash_value = liquidcash_quantity * liquidcash_ltp if liquidcash_quantity > 0 else 0
-
     if liquidcash_value < gross_amount_needed:
         message = f"FATAL: Not enough liquidity to cover the required amount. Required: {gross_amount_needed}, Available: {liquidcash_value}"
         print(message)
         order_placement.send_telegram_message(message)
         sys.exit(1)
 
-    if cash_available < gross_amount_needed - 1000:
-        required_amount = gross_amount_needed - cash_available + 1000
+    if cash_available < gross_amount_needed - 5000:
+        required_amount = gross_amount_needed - cash_available + 5000
         required_liquid_quantity = math.ceil(required_amount/liquidcash_ltp)
         try:
             # This logic is copied from process_entries to handle NSE/BSE
-            order_id = order_placement.place_market_order_live(liquid_symbol, 'NSE', 'SELL', required_liquid_quantity, 'CNC', 'Recon_Entry')
+            order_id = order_placement.place_market_order_live(liquid_symbol, 'NSE', 'SELL', required_liquid_quantity, 'CNC', 'Recon_Entry', notify_on_error=False)
             message = f"Order placed successfully for {liquid_symbol} on NSE. Order ID: {order_id}"
             print(message)
             order_placement.send_telegram_message(message)
         except Exception as e:
-            print(f"Error: Putting back liquidity {e}")
-            order_placement.send_telegram_message(str(e))
+            _notify_order_failure(order_placement, liquid_symbol, 'SELL', e)
 
 
 def put_back_liquidity(liquid_symbol, liquid_token, systemDetails, order_placement):
@@ -242,12 +253,12 @@ def put_back_liquidity(liquid_symbol, liquid_token, systemDetails, order_placeme
     
     try:
         # This logic is copied from process_entries to handle NSE/BSE
-        order_id = order_placement.place_market_order_live(liquid_symbol, 'NSE', 'BUY', liquidcash_quantity, 'CNC', 'Recon_Entry')
-        message = f"Order placed successfully for {symbol} on NSE. Order ID: {order_id}"
+        order_id = order_placement.place_market_order_live(liquid_symbol, 'NSE', 'BUY', liquidcash_quantity, 'CNC', 'Recon_Entry', notify_on_error=False)
+        message = f"Order placed successfully for {liquid_symbol} on NSE. Order ID: {order_id}"
         print(message)
         order_placement.send_telegram_message(message)
     except Exception as e:
-        order_placement.send_telegram_message(e)
+        _notify_order_failure(order_placement, liquid_symbol, 'BUY', e)
 
 def main():
     """Main pipeline execution function."""
@@ -299,7 +310,7 @@ def main():
             
     try:
         # Initial reconciliation before rebalancing loop
-        rebalance_portfolio(order_placement, systemDetails, active_trades, entry_df, exit_df, active_df, gross_amount_needed)
+        rebalance_portfolio(order_placement, systemDetails, active_trades, entry_df, exit_df, active_df, gross_amount_needed, active_trades)
 
     except Exception as e:
         print(f"ERROR: An unexpected error occurred in the main loop: {e}")

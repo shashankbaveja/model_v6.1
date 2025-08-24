@@ -18,7 +18,7 @@ import time
 import pandas as pd
 from sqlalchemy import create_engine
 import pymysql
-from myKiteLib import system_initialization, kiteAPIs
+from myKiteLib import system_initialization, kiteAPIs, OrderPlacement
 import logging
 import json
 from datetime import date, timedelta, datetime, time
@@ -36,8 +36,9 @@ warnings.filterwarnings("ignore")
 
 
 if __name__ == "__main__":
+
     BACKFILL_INTERVAL = 'minute'
-    BACKFILL_DAYS = 1
+    BACKFILL_DAYS = 30
     
     today_date = date.today()
     
@@ -48,63 +49,33 @@ if __name__ == "__main__":
 
     print(f"starting system_init")
     systemDetails = system_initialization()
-    print(f"starting init_trading")
     systemDetails.init_trading()
-    print(f"starting kiteAPIs")
     callKite = kiteAPIs()
-    print(f"starting get_instrument_active_tokens")
+    order_placement = OrderPlacement()
+    trades = callKite.get_trades()
+    systemDetails.store_daily_balances()
+    print("Trades Updated in DB!")
+    systemDetails.run_query_limit(f"Call trades_PnL();")
+    # Pnl, metrics = systemDetails.GetPnL()
+    # Pnl.to_csv('pnl.csv')
+    # print(metrics)
+    # order_placement.send_telegram_message(f"Metrics: {metrics}")
+    
     tokenList = [256265] ## NIFTY INDEX
+    tokenList.extend(callKite.get_instrument_active_tokens('EQ',end_dt_backfill))
     tokenList.extend(callKite.get_instrument_active_tokens('CE',end_dt_backfill))
     tokenList.extend(callKite.get_instrument_active_tokens('PE',end_dt_backfill))
     tokenList.extend(callKite.get_instrument_active_tokens('FUT',end_dt_backfill))
-    # tokenList.extend(callKite.get_instrument_all_tokens('EQ'))
 
 
     try:
+        query = f"Delete from kiteconnect.historical_data_{BACKFILL_INTERVAL} where timestamp >= date_add(CURDATE(), interval -{BACKFILL_DAYS} day)"
+        print(f"Deleting data for {start_dt_backfill} to {end_dt_backfill}")
+        result = systemDetails.DeleteData(query)
+        print(f"Result: {result}")
         df = callKite.getHistoricalData(start_dt_backfill,  end_dt_backfill, tokenList, BACKFILL_INTERVAL)
     except (KiteException, requests.exceptions.ReadTimeout) as e:
         print(f"Error fetching historical data: {e}")
         logging.error(f"Error fetching historical data: {e}")
         df = pd.DataFrame() # Initialize an empty DataFrame or handle as needed
-
-
-
-    
-
-
-# if __name__ == "__main__":
-#     BACKFILL_INTERVAL = 'minute'
-#     BACKFILL_DAYS = 59
-    
-#     # today_date = date.today()
-#     today_date = date(2022,12,26)
-#     end_dt_backfill = datetime.combine(today_date, time(23, 59, 59))
-    
-#     start_date_val = today_date - (timedelta(days=BACKFILL_DAYS))
-#     start_dt_backfill = datetime.combine(start_date_val, time(0, 0, 0))
-    
-#     for i in range(1,16):
-#         print(f"Fetching data for {start_dt_backfill} to {end_dt_backfill}")
-#         systemDetails = system_initialization()
-#         systemDetails.init_trading()
-#         callKite = kiteAPIs()
-
-#         tokenList = [256265] ## NIFTY INDEX
-#         # tokenList.extend(callKite.get_instrument_active_tokens('CE',end_dt_backfill))
-#         # tokenList.extend(callKite.get_instrument_active_tokens('PE',end_dt_backfill))
-#         # tokenList.extend(callKite.get_instrument_active_tokens('FUT',end_dt_backfill)
-#         # tokenList.extend(callKite.get_instrument_all_tokens('EQ'))
-
-
-#         try:
-#             df = callKite.getHistoricalData(start_dt_backfill,  end_dt_backfill, tokenList, BACKFILL_INTERVAL)
-#         except (KiteException, requests.exceptions.ReadTimeout) as e:
-#             print(f"Error fetching historical data: {e}")
-#             logging.error(f"Error fetching historical data: {e}")
-#             df = pd.DataFrame() # Initialize an empty DataFrame or handle as needed
-#         end_dt_backfill = end_dt_backfill - (timedelta(days=BACKFILL_DAYS))
-#         start_dt_backfill = start_dt_backfill - (timedelta(days=BACKFILL_DAYS))
-
-
-
     
