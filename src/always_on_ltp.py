@@ -38,6 +38,7 @@ def prepare_trade_data(systemDetails, now):
             
     signals_df['tradingsymbol'] = signals_df['instrument_token'].map(token_to_symbol)
     
+    signals_df = signals_df[signals_df['tradingsymbol'] != 'LIQUIDCASE']
     # Use hardcoded dates for testing if needed, otherwise use current date
     # exit_df = signals_df[signals_df['exit_date'] == '2025-07-18']
     # entry_df = signals_df[signals_df['entry_date'] == '2025-07-18']
@@ -152,6 +153,7 @@ def main():
     try:
         active_trades = retry_with_backoff(get_holdings, 3, 2, callKite, systemDetails, order_placement)
         print(f"Active Trades: {active_trades}")
+        active_trades = active_trades[active_trades['tradingsymbol'] != 'LIQUIDCASE']
         signals_df, entry_df, exit_df, active_df = prepare_trade_data(systemDetails, datetime.now())
     except Exception as e:
         print(f"FATAL: Could not fetch initial data after retries: {e}")
@@ -174,6 +176,7 @@ def main():
                 
                 # Use retry logic for fetching holdings
                 live_holdings_df = retry_with_backoff(get_holdings, 3, 2, callKite, systemDetails, order_placement)
+                live_holdings_df = live_holdings_df[live_holdings_df['tradingsymbol'] != 'LIQUIDCASE']
 
                 if live_holdings_df.empty:
                     print("No live holdings to monitor.")

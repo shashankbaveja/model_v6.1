@@ -8,7 +8,7 @@ data:
   training_start_date: '2021-05-01'
   training_end_date: '2023-05-30'
   validation_end_date: '2024-06-01'
-  test_end_date: '2025-08-22'
+  test_end_date: '2025-09-01'
   token_list_query: "Select distinct instrument_token FROM kiteconnect.instruments_zerodha a WHERE instrument_type = 'EQ' AND lot_size = 1"
   # nifty_50_token: 256265
 

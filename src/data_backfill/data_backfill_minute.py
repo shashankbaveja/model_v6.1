@@ -62,14 +62,14 @@ if __name__ == "__main__":
     # order_placement.send_telegram_message(f"Metrics: {metrics}")
     
     tokenList = [256265] ## NIFTY INDEX
-    tokenList.extend(callKite.get_instrument_active_tokens('EQ',end_dt_backfill))
+    # tokenList.extend(callKite.get_instrument_active_tokens('EQ',end_dt_backfill))
     tokenList.extend(callKite.get_instrument_active_tokens('CE',end_dt_backfill))
     tokenList.extend(callKite.get_instrument_active_tokens('PE',end_dt_backfill))
-    tokenList.extend(callKite.get_instrument_active_tokens('FUT',end_dt_backfill))
+    # tokenList.extend(callKite.get_instrument_active_tokens('FUT',end_dt_backfill))
 
 
     try:
-        query = f"Delete from kiteconnect.historical_data_{BACKFILL_INTERVAL} where timestamp >= date_add(CURDATE(), interval -{BACKFILL_DAYS} day)"
+        query = f"Delete from kiteconnect.historical_data_{BACKFILL_INTERVAL}_options where timestamp >= date_add(CURDATE(), interval -{BACKFILL_DAYS} day)"
         print(f"Deleting data for {start_dt_backfill} to {end_dt_backfill}")
         result = systemDetails.DeleteData(query)
         print(f"Result: {result}")
